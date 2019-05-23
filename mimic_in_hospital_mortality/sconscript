@@ -1,0 +1,282 @@
+# Tests the coverage of our recalibration method
+# Train model on all data
+# Predicting mortality
+
+import os
+
+from os.path import join
+from nestly.scons import SConsWrap
+from nestly import Nest
+from SCons.Script import Environment, Command, AddOption
+import numpy as np
+
+Import('env')
+localenv = env.Clone()
+
+nest = SConsWrap(Nest(), localenv['output'], alias_environment=localenv)
+
+# THIS DATASET HAS BEEN PCA and WHITENed
+# This data is obtainined by running
+# python process_mimic_holdout_pca.py --num-pca 20 --in-train-data ../data/mimic/in-hospital-mortality/mimic_in_hospital_train.pkl --in-test-data ../data/mimic/in-hospital-mortality/mimic_in_hospital_test.pkl --out-train ../data/mimic/in-hospital-mortality/mimic_in_hospital_train_holdout_pca.pkl --out-test ../data/mimic/in-hospital-mortality/mimic_in_hospital_test_holdout_pca.pkl
+TRAIN_DATA = "../data/mimic/in-hospital-mortality/mimic_in_hospital_train_pca.pkl"
+TEST_DATA = "../data/mimic/in-hospital-mortality/mimic_in_hospital_test_pca.pkl"
+COST_DECLINES = [0.5]
+LEARNING_RATE = 0.0002
+KFOLDS = 5
+MAX_ITERS = 12000
+FOLD_IDXS = [0,1,2,3,4]
+
+config_dict = {
+    "act_func": "relu",
+    "parametric_form": "bernoulli",
+    "density_layer_sizes": "117+20+10",
+    "density_weight": [0.005],
+    "decision_weight": [0.00001],
+    "weight_penalty_type": "ridge",
+    "do_no_harm": [40],
+    "log_barrier": [0.0001],
+    "support_sim_num": 12000,
+    "max_iters": MAX_ITERS,
+    "num_inits": 3,
+    "alpha": 0.1,
+}
+
+nest.add(
+    'cost_decline',
+    COST_DECLINES,
+    label_func=lambda c: 'cost_decline%s' % str(c),
+)
+
+nest.add(
+    'seed',
+    range(1),
+    label_func=lambda c: 'model_seed%d' % c,
+)
+
+nest.add_aggregate('aggregate_models', list)
+nest.add_aggregate('aggregate_coverages', list)
+nest.add_aggregate('aggregate_coverages_kuleshov', list)
+
+nest.add(
+    'fold_idx',
+    FOLD_IDXS,
+    label_func=lambda c: 'fold_idx%d' % c,
+)
+
+@nest.add_target_with_env(localenv)
+def split_data(env, outdir, c):
+    targets = [
+        join(outdir, 'obs_data_split.pkl')]
+    cmd = [
+        'python create_data_split.py',
+        '--seed',
+        c['seed'],
+        '--k-fold',
+        KFOLDS,
+        '--fold-idx',
+        c['fold_idx'],
+        '--in-data-file',
+        TRAIN_DATA,
+        '--out-file ${TARGETS[0]}']
+    return env.Command(
+        targets,
+        [],
+        ' '.join(map(str, cmd)))
+
+@nest.add_target_with_env(localenv)
+def fit_ulm_nns(env, outdir, c):
+    targets = [
+        join(outdir, 'fit_ulm_nn.pkl'),
+        join(outdir, 'fit_ulm_nn_log.txt')]
+    cmd = [
+        'srun -p matsen_e,campus --cpus-per-task 4',
+        'python fit_simultaneous_decision_density_nn.py',
+        '--seed',
+        10 + int(c['fold_idx'] * 4) + c['seed'],
+        '--data-file',
+        TRAIN_DATA,
+        '--data-split-file ${SOURCES[0]}',
+        '--density-parametric-form',
+        config_dict["parametric_form"],
+        '--density-layer-sizes',
+        config_dict["density_layer_sizes"],
+        '--density-weight-param',
+        ",".join(map(str, config_dict["density_weight"])),
+        '--decision-weight-param',
+        ",".join(map(str, config_dict["decision_weight"])),
+        '--log-barrier',
+        ",".join(map(str, config_dict["log_barrier"])),
+        '--weight-penalty-type',
+        config_dict["weight_penalty_type"],
+        '--do-no-harm',
+        ",".join(map(str, config_dict["do_no_harm"])),
+        '--cost-decline',
+        c['cost_decline'],
+        '--act-func',
+        config_dict['act_func'],
+        '--cv 2',
+        '--num-init',
+        config_dict['num_inits'],
+        '--support-sim-num',
+        config_dict['support_sim_num'],
+        '--max-iter',
+        config_dict['max_iters'],
+        '--learning-rate',
+        LEARNING_RATE,
+        '--fitted-file ${TARGETS[0]}',
+        '--log-file ${TARGETS[1]}']
+    c['aggregate_models'].append(targets[0])
+    return env.Command(
+        targets,
+        c['split_data'],
+        ' '.join(map(str, cmd)))
+
+@nest.add_target_with_env(localenv)
+def recalibrate(env, outdir, c):
+    targets = [
+        join(outdir, 'recalibrated_coverages.pkl'),
+        join(outdir, 'recalibrated_log.txt'),
+    ]
+    sources = [
+        c['split_data'][0],
+        c['fit_ulm_nns'][0],
+    ]
+    cmd = [
+        'python do_recalibration.py',
+        '--alphas',
+        config_dict['alpha'],
+        '--data-file',
+        TRAIN_DATA,
+        '--data-split-file ${SOURCES[0]}',
+        '--fitted-file ${SOURCES[1]}',
+        '--out-file ${TARGETS[0]}',
+        '--log-file ${TARGETS[1]}',
+    ]
+    c['aggregate_coverages'].append(targets[0])
+    return env.Command(
+        targets,
+        sources,
+        ' '.join(map(str, cmd)))
+
+@nest.add_target_with_env(localenv)
+def recalibrate_kuleshov(env, outdir, c):
+    targets = [
+        join(outdir, 'recalibrated_kuleshov_coverages.pkl'),
+        join(outdir, 'recalibrated_kuleshov_log.txt'),
+    ]
+    sources = [
+        c['split_data'][0],
+        c['fit_ulm_nns'][0],
+    ]
+    cmd = [
+        'python do_recalibration_kuleshov.py',
+        '--alphas',
+        config_dict['alpha'],
+        '--data-file',
+        TRAIN_DATA,
+        '--data-split-file ${SOURCES[0]}',
+        '--fitted-file ${SOURCES[1]}',
+        '--out-file ${TARGETS[0]}',
+        '--log-file ${TARGETS[1]}',
+    ]
+    c['aggregate_coverages_kuleshov'].append(targets[0])
+    return env.Command(
+        targets,
+        sources,
+        ' '.join(map(str, cmd)))
+
+nest.pop('fold_idx')
+
+@nest.add_target_with_env(localenv)
+def plot_mimic(env, outdir, c):
+    targets = [
+        join(outdir, 'accept_vs_age.png'),
+        join(outdir, 'pred_vs_age.png'),
+        join(outdir, 'local_coverages.png'),
+        join(outdir, 'example.png'),
+        join(outdir, 'plot_model_log.txt'),
+    ]
+    sources = [
+	c['aggregate_models']]
+    num_to_agg = len(c['aggregate_models'])
+    fitted_file_names = ",".join(["${SOURCES[%d]}" % i for i in range(num_to_agg)])
+    cmd = [
+        'python plot_mimic_in_hospital_mortality_fitted_models.py',
+        '--num-example 3',
+        '--alpha',
+        config_dict['alpha'],
+        '--num-rand 400',
+        '--train-data-file',
+        TRAIN_DATA,
+        '--test-data-file',
+        TEST_DATA,
+        '--fitted-files',
+        fitted_file_names,
+        '--out-age-plot ${TARGETS[0]}',
+        '--out-age-pred-plot ${TARGETS[1]}',
+        '--out-local-coverage-plot ${TARGETS[2]}',
+        '--out-example-plot ${TARGETS[3]}',
+        '--log-file ${TARGETS[4]}',
+    ]
+    return env.Command(
+        targets,
+        sources,
+        ' '.join(map(str, cmd)))
+
+
+@nest.add_target_with_env(localenv)
+def aggregate_results(env, outdir, c):
+    targets = [
+        join(outdir, 'aggregate_model_results.pkl'),
+        join(outdir, 'aggregate_model_results_log.txt'),
+    ]
+    sources = [
+	c['aggregate_models'],
+	c['aggregate_coverages'],
+	c['aggregate_coverages_kuleshov'],
+    ]
+    num_to_agg = len(c['aggregate_models'])
+    fitted_file_names = ",".join(["${SOURCES[%d]}" % i for i in range(num_to_agg)])
+    coverage_file_names = ",".join(["${SOURCES[%d]}" % (i + num_to_agg) for i in range(num_to_agg)])
+    kuleshov_coverage_file_names = ",".join(["${SOURCES[%d]}" % (i + 2 * num_to_agg) for i in range(num_to_agg)])
+    cmd = [
+        'python aggregate_fitted_models.py',
+        '--alpha',
+        config_dict['alpha'],
+        '--ci-alpha 0.05',
+        '--test-data-file',
+        TEST_DATA,
+        '--fitted-files',
+        fitted_file_names,
+        '--coverage-files',
+        coverage_file_names,
+        '--coverage-kuleshov-files',
+        kuleshov_coverage_file_names,
+        '--out-file ${TARGETS[0]}',
+        '--log-file ${TARGETS[1]}',
+    ]
+    return env.Command(
+        targets,
+        sources,
+        ' '.join(map(str, cmd)))
+
+@nest.add_target_with_env(localenv)
+def plot(env, outdir, c):
+    targets = [
+        join(outdir, 'result_log.txt')]
+    sources = [
+        c['aggregate_results'],
+    ]
+    cmd = [
+        'python plot_mimic_in_hospital_mortality.py',
+        '--alpha',
+        config_dict['alpha'],
+        '--test-data-file',
+        TEST_DATA,
+        '--result-files ${SOURCES[0]}',
+        '--log-file ${TARGETS[0]}',
+    ]
+    return env.Command(
+        targets,
+        sources,
+        ' '.join(map(str, cmd)))

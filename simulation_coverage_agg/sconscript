@@ -1,0 +1,250 @@
+# Evaluate coverage
+
+import os
+
+from os.path import join
+from nestly.scons import SConsWrap
+from nestly import Nest
+from SCons.Script import Environment, Command, AddOption
+import numpy as np
+
+Import('env')
+localenv = env.Clone()
+
+nest = SConsWrap(Nest(), localenv['output'], alias_environment=localenv)
+
+CI_ALPHA = 0.05
+NUM_TRAIN = [180,360,720,1440,2880, 5760]
+FOLD_IDXS = [0,1,2]
+NUM_FOLDS = 3
+COST_DECLINES = [3]
+SEEDS = range(100,200)
+CONFIGS = {
+    "simple": {
+        "num_p": 4,
+        "act_func": "tanh",
+        "std_dev_x": 3,
+        "parametric_form": "gaussian",
+        "density_layer_sizes": "4+10",
+        "density_weight": [0.001],
+        "decision_weight": [0.001],
+        "do_no_harm": [0.001],
+        "pi_alpha": 0.2,
+    },
+}
+
+nest.add(
+    'sim_func',
+    [
+        'simple',
+    ],
+)
+
+nest.add(
+    'cost_decline',
+    COST_DECLINES,
+    label_func=lambda c: 'cost_decline%.2f' % c,
+)
+
+nest.add_aggregate('aggregate_agg_coverages', list)
+nest.add_aggregate('aggregate_num_trains', list)
+
+nest.add(
+    'num_train',
+    NUM_TRAIN,
+    label_func=lambda c: 'num_train%d' % c,
+)
+
+nest.add(
+    'seed',
+    SEEDS,
+    label_func=lambda c: 'seed%d' % c,
+)
+
+@nest.add_target_with_env(localenv)
+def generate(env, outdir, c):
+    config_dict = CONFIGS[c["sim_func"]]
+    targets = [
+        join(outdir, 'obs_data.pkl'),
+        join(outdir, 'data_log.txt')]
+    cmd = [
+        'python generate_data.py',
+        '--seed',
+        c['seed'],
+        '--num-train',
+        c['num_train'],
+        '--sim-func',
+        c['sim_func'],
+        '--max-x 10',
+        '--sim-noise-sd',
+        config_dict["std_dev_x"],
+        '--out-data-file ${TARGETS[0]}',
+        '--log-file ${TARGETS[1]}']
+    return env.Command(
+        targets,
+        [],
+        ' '.join(map(str, cmd)))
+
+nest.add_aggregate('aggregate_models', list)
+nest.add_aggregate('aggregate_coverages', list)
+
+nest.add(
+    'fold_idx',
+    FOLD_IDXS,
+    label_func=lambda c: 'fold_idx%d' % c,
+)
+
+@nest.add_target_with_env(localenv)
+def split_data(env, outdir, c):
+    targets = [
+        join(outdir, 'obs_data_split.pkl')]
+    cmd = [
+        'python create_data_split.py',
+        '--seed',
+        c['seed'],
+        '--k-folds',
+        NUM_FOLDS,
+        '--fold-idx',
+        c['fold_idx'],
+        '--in-data-file ${SOURCES[0]}',
+        '--out-file ${TARGETS[0]}']
+    return env.Command(
+        targets,
+        c['generate'],
+        ' '.join(map(str, cmd)))
+
+@nest.add_target_with_env(localenv)
+def fit_neural_networks(env, outdir, c):
+    config_dict = CONFIGS[c["sim_func"]]
+    targets = [
+        join(outdir, 'fit_nn.pkl'),
+        join(outdir, 'fit_nn_log.txt')]
+    sources = [
+        c['generate'][0],
+        c['split_data'][0]]
+    cmd = [
+	'srun -p matsen_e,campus --cpus-per-task 4',
+        'python fit_simultaneous_decision_density_nn.py',
+        '--seed 10',
+        '--data-file ${SOURCES[0]}',
+        '--data-split-file ${SOURCES[1]}',
+        '--density-parametric-form',
+        config_dict["parametric_form"],
+        '--density-layer-sizes',
+        config_dict["density_layer_sizes"],
+        #'--decision-layer-sizes',
+        #config_dict["decision_layer_sizes"],
+        '--density-weight',
+        ",".join(map(str, config_dict["density_weight"])),
+        '--decision-weight',
+        ",".join(map(str, config_dict["decision_weight"])),
+        '--do-no-harm',
+        ",".join(map(str, config_dict["do_no_harm"])),
+        '--cost-decline',
+        c['cost_decline'],
+        '--act-func relu',
+        '--cv 2',
+        '--num-init 2',
+        '--support-sim-num 100',
+        '--max-iter 30000',
+        '--fitted-file ${TARGETS[0]}',
+        '--log-file ${TARGETS[1]}']
+    c['aggregate_models'].append(targets[0])
+    return env.Command(
+        targets,
+        sources,
+        ' '.join(map(str, cmd)))
+
+@nest.add_target_with_env(localenv)
+def recalibrate(env, outdir, c):
+    config_dict = CONFIGS[c["sim_func"]]
+    targets = [
+        join(outdir, 'recalibrated_coverages.pkl'),
+        join(outdir, 'recalibrated_log.txt'),
+    ]
+    sources = [
+        c['generate'][0],
+        c['split_data'][0],
+        c['fit_neural_networks'][0],
+    ]
+    cmd = [
+        'python do_recalibration.py',
+        '--alphas',
+        config_dict['pi_alpha'],
+        '--data-file ${SOURCES[0]}',
+        '--data-split-file ${SOURCES[1]}',
+        '--fitted-file ${SOURCES[2]}',
+        '--out-file ${TARGETS[0]}',
+        '--log-file ${TARGETS[1]}',
+    ]
+    c['aggregate_coverages'].append(targets[0])
+    return env.Command(
+        targets,
+        sources,
+        ' '.join(map(str, cmd)))
+
+nest.pop('fold_idx')
+
+@nest.add_target_with_env(localenv)
+def create_aggregate_intervals(env, outdir, c):
+    targets = [
+        join(outdir, 'aggregate_intervals.pkl'),
+        join(outdir, 'aggregate_intervals_log.txt'),
+    ]
+    sources = [
+	c['aggregate_models'],
+	c['aggregate_coverages'],
+        c['generate'][0]]
+    num_to_agg = len(c['aggregate_models'])
+    fitted_file_names = ",".join(["${SOURCES[%d]}" % i for i in range(num_to_agg)])
+    coverage_file_names = ",".join(["${SOURCES[%d]}" % (i + num_to_agg) for i in range(num_to_agg)])
+    cmd = [
+        'python eval_aggregate_intervals.py',
+        '--seed',
+        c['seed'] + 1234,
+        '--num-rand 100',
+        '--num-test 50000',
+        '--ci-alpha',
+        CI_ALPHA,
+        '--data-file ${SOURCES[%d]}' % (num_to_agg * 2),
+        '--fitted-files',
+        fitted_file_names,
+        '--coverage-files',
+        coverage_file_names,
+        '--out-file ${TARGETS[0]}',
+        '--log-file ${TARGETS[1]}',
+    ]
+    c['aggregate_agg_coverages'].append(targets[0])
+    c['aggregate_num_trains'].append(c['num_train'])
+    return env.Command(
+        targets,
+        sources,
+        ' '.join(map(str, cmd)))
+
+nest.pop('seed')
+nest.pop('num_train')
+
+@nest.add_target_with_env(localenv)
+def plot(env, outdir, c):
+    config_dict = CONFIGS[c["sim_func"]]
+    targets = [
+        join(outdir, 'agg_coverage_vs_num_train1.png')]
+    sources = [
+	c['aggregate_agg_coverages']]
+    num_to_agg = len(c['aggregate_agg_coverages'])
+    cov_file_names = ",".join(["${SOURCES[%d]}" % i for i in range(num_to_agg)])
+    num_trains = ",".join(map(str, c['aggregate_num_trains']))
+    cmd = [
+        'python plot_simulation_coverage_agg.py',
+        '--pi-alpha',
+        config_dict['pi_alpha'],
+        '--coverage-files',
+        cov_file_names,
+        '--num-train',
+        num_trains,
+        '--plot-file ${TARGETS[0]}',
+    ]
+    return env.Command(
+        targets,
+        sources,
+        ' '.join(map(str, cmd)))
