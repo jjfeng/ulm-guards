@@ -55,14 +55,13 @@ def parse_args(args):
         help="comma separated")
     parser.add_argument('--train-data-file',
         type=str,
-        default="/fh/fast/matsen_e/jfeng2/mnist/mnist_train_pca.pkl")
+        default="../data/mnist/mnist_train_pca.pkl")
     parser.add_argument('--test-data-file',
         type=str,
-        default="/fh/fast/matsen_e/jfeng2/mnist/mnist_test_pca.pkl")
+        default="../data/mnist/mnist_test_pca.pkl")
     parser.add_argument('--weird-data-file',
         type=str,
-        default="/fh/fast/matsen_e/jfeng2/mnist/weird_mnist_test_pca.pkl")
-        #default="../data/notMNIST_small/no_mnist_test_pca.pkl")
+        default="../data/mnist/weird_mnist_test_pca.pkl")
     parser.add_argument('--log-file',
         type=str,
         default="_output/plot_mnist_log.txt")

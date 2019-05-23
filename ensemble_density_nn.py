@@ -25,7 +25,7 @@ class EnsembleDensityNN(EnsemblePredictionNN):
             learning_rate=0.002,
             sgd_batch_size=4000,
             do_distributed=False,
-            scratch_dir="/fh/fast/matsen_e/jfeng2/scratch"):
+            scratch_dir="scratch"):
         """
         @param num_inits: number of random initializations
         @param max_iters: max number of training iterations

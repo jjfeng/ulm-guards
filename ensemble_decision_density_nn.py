@@ -38,7 +38,7 @@ class EnsembleSimultaneousDensityDecisionNNs:
             support_sim_settings: SupportSimSettings=None,
             support_sim_num: int=100,
             do_distributed=False,
-            scratch_dir="/fh/fast/matsen_e/jfeng2/scratch"):
+            scratch_dir="scratch"):
         """
         (other parameters defined in fit_simultaneous_decision_prediction_nn.py)
         @param num_inits: number of random initializations

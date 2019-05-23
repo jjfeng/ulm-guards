@@ -13,9 +13,9 @@ localenv = env.Clone()
 
 nest = SConsWrap(Nest(), localenv['output'], alias_environment=localenv)
 
-TRAIN_DATA = "/fh/fast/matsen_e/jfeng2/mnist/mnist_train_pca.pkl"
-TEST_DATA = "/fh/fast/matsen_e/jfeng2/mnist/mnist_test_pca.pkl"
-WEIRD_DATA = "/fh/fast/matsen_e/jfeng2/mnist/weird_mnist_test_pca.pkl"
+TRAIN_DATA = "../data/mnist/mnist_train_pca.pkl"
+TEST_DATA = "../data/mnist/mnist_test_pca.pkl"
+WEIRD_DATA = "../data/mnist/weird_mnist_test_pca.pkl"
 COST_DECLINES = [0.3]
 DROPOUT_RATE = 0.1
 NUM_ENSEMBLE = 5

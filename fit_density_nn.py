@@ -99,7 +99,7 @@ def parse_args(args):
         default="_output/fitted.pkl")
     parser.add_argument('--scratch-dir',
         type=str,
-        default="/fh/fast/matsen_e/jfeng2/scratch")
+        default="scratch")
     parser.set_defaults()
     args = parser.parse_args()
 

@@ -26,53 +26,22 @@ def parse_args(args):
             '--out-train-data',
             type=str,
             help='file for storing output training dataset',
-            default="/fh/fast/matsen_e/jfeng2/mnist/mnist_train_pca.pkl")
+            default="../data/mnist/mnist_train_pca.pkl")
     parser.add_argument(
             '--out-test-data',
             type=str,
             help='file for storing output test dataset',
-            default="/fh/fast/matsen_e/jfeng2/mnist/mnist_test_pca.pkl")
+            default="../data/mnist/mnist_test_pca.pkl")
     parser.add_argument(
             '--out-weird-data',
             type=str,
             help='file for storing output test dataset',
-            default="/fh/fast/matsen_e/jfeng2/mnist/weird_mnist_test_pca.pkl")
+            default="../data/mnist/weird_mnist_test_pca.pkl")
     parser.add_argument(
             '--do-pca',
             action="store_true")
-    parser.add_argument(
-        '--not-mnist-folder',
-        type=str,
-        default='../data/notMNIST_small/A')
-    parser.add_argument(
-            '--out-not-mnist-data',
-            type=str,
-            help='file for storing output test dataset',
-            default='../data/notMNIST_small/no_mnist_test_pca.pkl')
-    parser.add_argument(
-            '--out-random-images-plot',
-            type=str,
-            default='_output/images/random_mnist_kinda_images.png')
     args = parser.parse_args()
     return args
-
-def read_notmnist(folder_name):
-    images = [
-            file_name for file_name in os.listdir(folder_name)
-            if file_name.endswith(".png") and not file_name.startswith("._")]
-    all_data = []
-    for image_name in images:
-        img = cv2.imread(os.path.join(folder_name, image_name))
-        if img is not None:
-            all_data.append([img[:,:,0]])
-    X = np.vstack(all_data)
-    print(X.shape)
-    return X
-
-def transform_data(x, pca):
-    x = x.reshape((x.shape[0], -1))/255.0
-    return x
-    #return pca.transform(x)
 
 def main(args=sys.argv[1:]):
     args = parse_args(args)
@@ -113,16 +82,10 @@ def main(args=sys.argv[1:]):
     num_p = x_train.shape[1]
     min_x = np.min(np.concatenate([x_train, x_test]), axis=0).reshape((1,-1))
     max_x = np.max(np.concatenate([x_train, x_test]), axis=0).reshape((1,-1))
-    #print(max_x - min_x)
     support_sim_settings = SupportSimSettingsContinuousMulti(
             num_p,
             min_x=min_x,
             max_x=max_x)
-    #diffs = max_x - min_x
-    #print(np.sum(diffs > 0))
-    #print(np.sum(np.log(diffs[diffs > 0])))
-    print(x_train.shape)
-    print(x_test.shape)
 
 
     train_data = Dataset(x=x_train, y=y_train_categorical, num_classes=num_train_classes)
@@ -140,25 +103,6 @@ def main(args=sys.argv[1:]):
     print("NUM WEiRD IN SUPPORT", np.sum(check_supp))
     weird_x = weird_x[check_supp,:]
     pickle_to_file(weird_x, args.out_weird_data)
-
-    #num_points = 10
-    #random_x = support_sim_settings.support_unif_rvs(num_points)
-    #random_imgs = pca.inverse_transform(random_x)
-    #random_imgs = random_imgs.reshape(
-    #        (num_points, orig_image_shape[0], orig_image_shape[1]))
-    #fig, ax = plt.subplots(num_points)
-    #for i in range(num_points):
-    #    im = ax[i].imshow(random_imgs[i],
-    #                         cmap=plt.cm.binary, interpolation='nearest')
-    #plt.savefig(args.out_random_images_plot)
-
-    #not_mnist_x = read_notmnist(args.not_mnist_folder)
-    ##not_mnist_x = transform_data(not_mnist_x, None)
-    #not_mnist_x = not_mnist_x.reshape((not_mnist_x.shape[0], -1))/255.0
-    #random_idx = np.random.choice(not_mnist_x.shape[0], size=1000, replace=False)
-    ##check_supp = support_sim_settings.check_obs_x(not_mnist_x)
-    ##print("num not mnist", np.sum(check_supp))
-    #pickle_to_file(not_mnist_x[random_idx,:], args.out_not_mnist_data)
 
 if __name__ == '__main__':
     main(sys.argv[1:])
