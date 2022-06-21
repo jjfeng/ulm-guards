@@ -1,7 +1,7 @@
 biopython==1.70
 matplotlib==2.1.0
 nestly==0.6.1
-numpy==1.15.4
+numpy==1.22.0
 pandas==0.20.3
 patsy==0.5.1
 pyparsing==2.3.0
